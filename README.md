@@ -1,4 +1,4 @@
-# QueryPilot-AI — SQL & Document AI Agents
+o# QueryPilot-AI — SQL & Document AI Agents
 
 A portfolio adaptation exploring natural-language queries over SQLite databases and document question answering with LangChain.
 
@@ -58,6 +58,5 @@ npm start
 
 The default question is `Employees who were hired after 2005?`. Edit the `prompt` in `index2.js` to try another question. The demo prints the agent's intermediate steps, generated queries, and database observations.
 
-## Project origins
 
-Adapted from [Syed007Hassan/Langchain](https://github.com/Syed007Hassan/Langchain). This repository starts with a fresh commit history; source attribution is retained here. The Python Streamlit interface, read-only query execution, document retrieval, and tests were added in this adaptation. The legacy document chat identifies its ChatLangChain origins in its own README.
+
