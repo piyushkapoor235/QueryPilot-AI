@@ -1,10 +1,25 @@
 import unittest
+import os
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
 
 class StreamlitTests(unittest.TestCase):
+    def setUp(self):
+        self.environment = patch.dict(os.environ, {
+            'APP_ENV': 'development', 'DEV_AUTH_BYPASS': 'true', 'GROQ_API_KEY': '',
+        })
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def test_server_key_is_not_rendered(self):
+        with patch.dict(os.environ, {'GROQ_API_KEY': 'server-test-key'}):
+            app = AppTest.from_file('streamlit_app.py').run(timeout=30)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.sidebar.text_input[0].value, '')
+        self.assertFalse(app.chat_input[0].disabled)
+
     def test_initial_modes_without_credentials(self):
         app = AppTest.from_file('streamlit_app.py').run(timeout=30)
         self.assertFalse(app.exception)
@@ -12,6 +27,18 @@ class StreamlitTests(unittest.TestCase):
         app.sidebar.radio[0].set_value('Document Chat').run()
         self.assertFalse(app.exception)
         self.assertEqual(app.button(key='index_documents').label, 'Index documents')
+        self.assertEqual(app.sidebar.text_input[0].label, 'Groq API key')
+        self.assertEqual(app.sidebar.text_input[1].value, 'llama-3.3-70b-versatile')
+
+    def test_document_index_without_credentials(self):
+        app = AppTest.from_file('streamlit_app.py').run(timeout=30)
+        app.sidebar.radio[0].set_value('Document Chat').run()
+        app.button(key='index_documents').click().run(timeout=30)
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertTrue(app.success)
+        self.assertGreater(len(app.session_state['document_index']['vectors']), 0)
+        self.assertTrue(app.chat_input[0].disabled)
 
     def test_sql_chat_rendering_and_clear(self):
         app = AppTest.from_file('streamlit_app.py').run(timeout=30)

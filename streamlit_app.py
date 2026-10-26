@@ -7,7 +7,10 @@ from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_groq import ChatGroq
+
+from authentication import require_authentication
+from local_embeddings import LocalEmbeddings
 from pypdf import PdfReader
 
 from querypilot import answer_documents, answer_sql, build_document_index, database_schema
@@ -17,6 +20,8 @@ load_dotenv(ROOT / ".env")
 st.set_page_config(page_title="QueryPilot", page_icon="💬", layout="wide")
 st.title("QueryPilot")
 st.caption("Ask your database. Explore your documents.")
+
+principal = require_authentication()
 
 
 def secret(name, default=""):
@@ -32,9 +37,10 @@ def secret(name, default=""):
 with st.sidebar:
     st.header("Workspace")
     mode = st.radio("Choose a mode", ["SQL Chat", "Document Chat"])
-    api_key = st.text_input("OpenAI API key", type="password", value=secret("OPENAI_API_KEY"))
-    model_name = st.text_input("Model", value=secret("OPENAI_MODEL", "gpt-4.1-mini"))
-    st.caption("Questions and retrieved data are sent to OpenAI. Use sample or non-sensitive data.")
+    supplied_key = st.text_input("Groq API key", type="password")
+    api_key = supplied_key or secret("GROQ_API_KEY")
+    model_name = st.text_input("Model", value=secret("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    st.caption("Questions and retrieved data are sent to Groq. Use sample or non-sensitive data.")
     uploads = []
     if mode == "Document Chat":
         uploads = st.file_uploader("Upload PDF, TXT, or Markdown", type=["pdf", "txt", "md"],
@@ -64,32 +70,30 @@ else:
         st.session_state.pop("document_index", None)
         messages.clear()
     st.caption('Try: "Explain the single responsibility principle."')
+    st.caption("Indexing runs locally using word matching; no API key or model download is needed.")
     if st.button("Index documents", type="primary", key="index_documents"):
-        if not api_key:
-            st.warning("Enter your API key first.")
-        else:
-            try:
-                with st.spinner("Reading and indexing documents…"):
-                    if sum(upload.size for upload in uploads) > 10 * 1024 * 1024:
-                        raise ValueError("Please upload at most 10 MB in total.")
-                    sources = []
-                    for upload in uploads:
-                        if upload.name.lower().endswith(".pdf"):
-                            reader = PdfReader(io.BytesIO(upload.getvalue()))
-                            sources.extend((f"{upload.name}, page {i}", page.extract_text() or "")
-                                           for i, page in enumerate(reader.pages, 1))
-                        else:
-                            sources.append((upload.name, upload.getvalue().decode("utf-8-sig")))
-                    if not uploads:
-                        sources = [("SOLID principles", (ROOT / "VECTORSTORE-AGENT" /
-                                    "Solid_Principles.txt").read_text(encoding="utf-8"))]
-                    embedding_model = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-                    new_index = build_document_index(sources, embedding_model)
-                    st.session_state["document_index"] = new_index
-                    messages.clear()
-                st.success(f"Indexed {len(new_index['chunks'])} text chunks.")
-            except Exception as exc:
-                st.error(f"Indexing failed ({type(exc).__name__}). Check your key and document format.")
+        try:
+            with st.spinner("Reading and indexing documents…"):
+                if sum(upload.size for upload in uploads) > 10 * 1024 * 1024:
+                    raise ValueError("Please upload at most 10 MB in total.")
+                sources = []
+                for upload in uploads:
+                    if upload.name.lower().endswith(".pdf"):
+                        reader = PdfReader(io.BytesIO(upload.getvalue()))
+                        sources.extend((f"{upload.name}, page {i}", page.extract_text() or "")
+                                       for i, page in enumerate(reader.pages, 1))
+                    else:
+                        sources.append((upload.name, upload.getvalue().decode("utf-8-sig")))
+                if not uploads:
+                    sources = [("SOLID principles", (ROOT / "VECTORSTORE-AGENT" /
+                                "Solid_Principles.txt").read_text(encoding="utf-8"))]
+                embedding_model = LocalEmbeddings()
+                new_index = build_document_index(sources, embedding_model)
+                st.session_state["document_index"] = new_index
+                messages.clear()
+            st.success(f"Indexed {len(new_index['chunks'])} text chunks.")
+        except Exception as exc:
+            st.error(f"Indexing failed ({type(exc).__name__}). Check your document format.")
     if "document_index" in st.session_state:
         st.caption("Documents are indexed for this browser session.")
 
@@ -117,7 +121,7 @@ for message in messages:
 disabled = not api_key or not model_name or (mode == "Document Chat" and
                                             "document_index" not in st.session_state)
 if not api_key:
-    st.caption("Enter an OpenAI API key in the sidebar to start chatting.")
+    st.caption("Enter a Groq API key in the sidebar to start chatting.")
 if question := st.chat_input("Ask a question…", disabled=disabled):
     recent = [{"role": m["role"], "content": m["content"]} for m in messages[-6:]]
     user_message = {"role": "user", "content": question}
@@ -125,14 +129,14 @@ if question := st.chat_input("Ask a question…", disabled=disabled):
     render_message(user_message)
     try:
         with st.spinner("Finding an answer…"):
-            model = ChatOpenAI(model=model_name, api_key=api_key, temperature=0,
+            model = ChatGroq(model=model_name, api_key=api_key, temperature=0,
                                timeout=45, max_retries=1)
             if mode == "SQL Chat":
                 result = answer_sql(model, question, recent)
                 response = {"role": "assistant", "content": f"Returned {len(result['rows'])} rows.",
                             **result}
             else:
-                embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
+                embeddings = LocalEmbeddings()
                 result = answer_documents(model, embeddings, question, recent,
                                           st.session_state["document_index"])
                 response = {"role": "assistant", "content": result["answer"],
