@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import math
 import os
 import time
@@ -21,6 +22,7 @@ class AuthPolicy:
     client_id: str
     allowed_emails: frozenset[str]
     max_session_seconds: int = 28800
+    access_mode: str = 'allowlist'
 
 
 @dataclass(frozen=True)
@@ -41,8 +43,14 @@ def policy_from_settings(settings, environment="production"):
     access = settings.get("app_auth", {})
     for key in ("client_id", "client_secret", "cookie_secret", "redirect_uri",
                 "server_metadata_url"):
-        if not isinstance(auth.get(key), str) or not auth[key].strip():
-            raise AuthenticationError("Authentication configuration is incomplete.")
+        value = auth.get(key)
+        if (not isinstance(value, str) or not value.strip()
+                or value.strip().upper().startswith(("YOUR_", "REPLACE_WITH_"))):
+            raise AuthenticationError(f"Authentication setting [auth].{key} is missing or a placeholder.")
+    if auth['client_secret'].strip() == auth['client_id'].strip():
+        raise AuthenticationError(
+            'The Client Secret matches the Client ID. Enter the application Client Secret privately.'
+        )
     if len(auth["cookie_secret"]) < 32 or auth.get("expose_tokens"):
         raise AuthenticationError("Use a strong cookie secret and keep tokens private.")
     metadata = urlsplit(auth["server_metadata_url"])
@@ -57,15 +65,18 @@ def policy_from_settings(settings, environment="production"):
             or redirect.query or redirect.fragment or redirect.path != "/oauth2callback"
             or (redirect.scheme != "https" and not local_redirect)):
         raise AuthenticationError("Configure the exact HTTPS authentication callback URL.")
+    mode = access.get('access_mode', 'allowlist')
+    if mode not in {'allowlist', 'verified_users'}:
+        raise AuthenticationError('Configure a valid application access mode.')
     emails = access.get("allowed_emails", [])
-    if (not isinstance(emails, (list, tuple)) or not emails
+    if (not isinstance(emails, (list, tuple)) or (mode == 'allowlist' and not emails)
             or any(not isinstance(email, str) or "@" not in email for email in emails)):
         raise AuthenticationError("Configure the application account allowlist.")
     max_age = access.get("max_session_seconds", 28800)
     if type(max_age) is not int or not 300 <= max_age <= 86400:
         raise AuthenticationError("Session lifetime must be between 300 and 86400 seconds.")
     return AuthPolicy(f"https://{metadata.netloc}/", auth["client_id"],
-                      frozenset(email.strip().casefold() for email in emails), max_age)
+                      frozenset(email.strip().casefold() for email in emails), max_age, mode)
 
 
 def principal_from_claims(claims, policy, now=None):
@@ -78,10 +89,14 @@ def principal_from_claims(claims, policy, now=None):
     audiences = audience if isinstance(audience, list) else [audience]
     if policy.client_id not in audiences:
         raise AuthenticationError("The identity is not issued for this application.")
-    if (not isinstance(subject, str) or not subject.strip()
-            or not isinstance(email, str) or claims.get("email_verified") is not True
-            or email.strip().casefold() not in policy.allowed_emails):
-        raise AuthenticationError("This account is not authorized. Verify your email or contact the administrator.")
+    if not isinstance(subject, str) or not subject.strip():
+        raise AuthenticationError("The identity provider did not return an account identity. Please sign in again.")
+    if not isinstance(email, str) or not email.strip():
+        raise AuthenticationError("The identity provider did not return an email address.")
+    if policy.access_mode == 'allowlist' and email.strip().casefold() not in policy.allowed_emails:
+        raise AuthenticationError("Your signed-in email is not on the application allowlist. Sign out and use the allowed account.")
+    if claims.get("email_verified") is not True:
+        raise AuthenticationError("Auth0 reports your email as unverified. Verify the email for this account, then sign out and sign in again.")
     issued, expires = claims.get("iat"), claims.get("exp")
     if (any(type(value) not in (int, float) or not math.isfinite(value)
             for value in (issued, expires))
@@ -127,6 +142,15 @@ def require_authentication():
         try:
             principal = principal_from_claims(claims, policy)
         except AuthenticationError as exc:
+            if environment == 'development':
+                email = claims.get('email')
+                logging.getLogger('querypilot.local_auth').warning(
+                    'Auth policy diagnostic: email_present=%s email_allowed=%s email_verified=%s subject_present=%s',
+                    isinstance(email, str) and bool(email.strip()),
+                    isinstance(email, str) and email.strip().casefold() in policy.allowed_emails,
+                    claims.get('email_verified') is True,
+                    isinstance(claims.get('sub'), str) and bool(claims['sub'].strip()),
+                )
             clear_session(preserve_auth_controls=True)
             st.error(str(exc))
             if st.button("Sign out", key="auth_logout"):

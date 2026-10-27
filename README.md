@@ -2,14 +2,37 @@
 
 A portfolio adaptation exploring natural-language queries over SQLite databases and document question answering with LangChain.
 
+**Start here:** [Project architecture](ARCHITECTURE.md) explains the current
+system, company isolation, source files, data flows, planned features, and known
+gaps. Update it with every feature change; see [repository instructions](AGENTS.md).
+
 ## Streamlit app
 
 The new Python interface includes:
 
-- **SQL Chat:** ask questions about Northwind, inspect generated SQL, and view results in tables. Read-only SQLite execution blocks mutations, limits returned rows, and interrupts expensive queries. A failed query gets one correction attempt.
+- **SQL Chat:** ask questions about approved company PostgreSQL datasets or the public Northwind sample, inspect generated SQL, and view bounded results. Company queries enforce published table/column permissions and a restricted SELECT policy; the SQLite sample retains its read-only authorizer. A failed policy/query can receive one correction attempt.
 - **Document Chat:** upload PDF, TXT, or Markdown files, create an in-memory embedding index, and ask questions with retrieved excerpts and source citations. Follow-up questions use recent conversation context. Without uploads, use the bundled SOLID principles document.
 - Separate conversation histories for each mode, configurable model, and password-style API-key input.
 - Auth0 Universal Login with verified-account allowlisting and session isolation.
+- Persistent companies, company-scoped Admin/User memberships, company switching,
+  and single-use invitations. Admins publish shared documents; Users can read them.
+
+### Company workspaces
+
+See [company setup](docs/company-workspaces.md) for database initialization,
+registration policy, invitations, roles, and current limitations. Development
+uses an ignored local SQLite application database. Production requires PostgreSQL
+through `QUERYPILOT_DATABASE_URL` and a one-time `python tenancy.py` initialization.
+This application database is separate from the public Northwind SQL sample.
+
+### Company SQL connections
+
+Admins can publish PostgreSQL sources from server-provisioned company connection
+references, inspect readable schemas, and approve explicit tables/columns. SQL
+Chat enforces that policy before execution and returning results. See
+[data source setup](docs/data-sources.md) for credential provisioning, TLS,
+supported SELECT syntax, initialization, and deployment-validation requirements.
+Northwind remains available as a public sample.
 
 ### Authentication and production design
 
@@ -19,10 +42,10 @@ Authentication is required by default. Configure Auth0 using the
 email/password and social login through one hosted login page. The app does not
 store passwords. Missing authentication configuration blocks workspace access.
 
-The [production design](docs/production-design.md) covers identity, future
-workspace authorization, persistence, ingestion, AI quotas, and operations.
-Authentication is the first implementation stage; the full production system
-is not yet complete.
+The [architecture reference](ARCHITECTURE.md) tracks implemented authentication,
+company authorization, persistence, and PostgreSQL source permissions alongside
+planned ingestion, AI quotas, and operations. The full production system is not
+yet complete.
 
 ### Run locally
 
@@ -43,7 +66,7 @@ Create a Groq API key at https://console.groq.com/keys and set `GROQ_API_KEY`, o
 
 Document retrieval uses local hashed word and word-pair vectors. It matches overlapping words rather than semantic meaning, so include relevant document terminology in your questions. Indexing works without a key; generating answers requires a Groq key.
 
-The SQL view returns database results directly. Document answers use the top four retrieved chunks; citations identify retrieved excerpts, but answers should still be checked. Uploaded text and embeddings remain in the browser session's server memory. Clearing the conversation does not clear the document index; changing uploads replaces it.
+The SQL view returns results from the selected company PostgreSQL source or public Northwind sample. Document answers use the top four retrieved chunks; citations identify retrieved excerpts, but answers should still be checked. Admin-indexed document text is persisted in the application database and shared only with that company's members. Vectors and conversations remain in session memory. Clearing a conversation does not delete published documents. Company or role changes clear session workspace state; SQL source/policy changes clear SQL history.
 
 ### Streamlit Community Cloud
 
@@ -52,7 +75,7 @@ Connect this GitHub repository, select `main`, and set the entrypoint to `stream
 ### Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest test_querypilot test_streamlit_app test_groq test_authentication -v
+.\.venv\Scripts\python.exe -B -m unittest test_data_connections test_tenancy test_querypilot test_streamlit_app test_groq test_authentication test_local_auth_server -v
 ```
 
 Tests cover Northwind queries, blocked mutations and attachments, row limits, CTEs, query timeouts, SQL correction, document chunking, and embeddings with test doubles. Tests exercise local document retrieval, both chat modes, and Groq request/response handling with a mocked HTTP transport; live AI answers require a Groq API key and model access.

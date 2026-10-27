@@ -1,5 +1,9 @@
 # QueryPilot production design
 
+The [central architecture reference](../ARCHITECTURE.md) tracks current
+implementation status and the multi-company SaaS target. This document provides
+additional identity and deployment notes; keep both consistent when they change.
+
 ## Scope and rollout
 
 Start with the existing Streamlit application and managed OpenID Connect (OIDC)
@@ -17,8 +21,13 @@ the main app's authentication.
 | 4: AI request control | Server-side Groq client, per-user quotas, concurrency and retry limits | Spend ceilings, rate limiting, model failure tests |
 | 5: Operations | TLS ingress, private app service, secret manager, metrics, backups | Restore drill, health checks, alerts, deployment rollback |
 
-Only stage 1 is being implemented in this iteration. Other rows describe intended
-work, not existing production capabilities.
+Identity and the first company-membership checkpoint are implemented. See
+[company workspaces](company-workspaces.md) for current setup and limitations.
+Persistent company documents are an interim database-backed implementation;
+object storage, background ingestion, quotas, and operations remain future work.
+Company-scoped PostgreSQL sources and explicit table/column permissions are now
+implemented; see [data source setup](data-sources.md). Live PostgreSQL validation,
+per-member dataset grants, and customer writes remain outstanding.
 
 ## Authentication boundary
 
@@ -46,8 +55,9 @@ user ID, decoded unsigned JWT, or API key as user authentication.
 
 The stable account identity is `(issuer, subject)`. Email is a verified access
 policy input and display value, not a permanent database key. The first release
-uses an explicit email allowlist for private access. Future workspace roles must
-come from server-owned membership records, not UI controls or arbitrary claims.
+uses an explicit email allowlist for private access; verified-user registration
+is an explicit alternative. Company roles come from server-owned membership
+records, not UI controls or arbitrary claims.
 
 Require authentication by default. Missing or invalid configuration must block
 workspace access. A development bypass requires both `APP_ENV=development` and
@@ -78,12 +88,13 @@ before describing this deployment as production ready. Add external ingress rate
 limits, application quotas, security event logging with redaction, operational
 monitoring, and persistence/backup validation before broad public rollout.
 
-## Next data model
+## Company data model
 
-`users(id, issuer, subject, created_at)` has a unique constraint on
-`(issuer, subject)`. `workspaces(id, name)` and
-`memberships(user_id, workspace_id, role)` define authorization. Documents, vector
-indexes, and conversations carry `workspace_id` and an owner where appropriate.
+The implemented `users(id, issuer, subject, email)` has a unique constraint on
+`(issuer, subject)`. `companies(id, name, revision)` and
+`memberships(user_id, company_id, role)` define authorization. Published document
+text carries `company_id`. Future persistent conversations and vector indexes
+must carry `company_id` and an owner where appropriate.
 Every API or worker operation must derive the user from a verified server-side
 session and check membership before reading or writing data. An authenticated
 user must never gain access merely by changing a resource identifier.

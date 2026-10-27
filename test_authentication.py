@@ -7,7 +7,8 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from authentication import (AuthenticationError, policy_from_settings,
-                            principal_from_claims)
+                            principal_from_claims, Principal)
+from test_company_support import company_fixture
 
 
 def settings():
@@ -30,6 +31,13 @@ def identity():
 
 
 class PolicyTests(unittest.TestCase):
+    def test_denial_distinguishes_wrong_account_from_unverified_email(self):
+        policy = policy_from_settings(settings())
+        with self.assertRaisesRegex(AuthenticationError, 'allowlist'):
+            principal_from_claims({**identity(), 'email': 'other@example.com'}, policy)
+        with self.assertRaisesRegex(AuthenticationError, 'unverified'):
+            principal_from_claims({**identity(), 'email_verified': False}, policy)
+
     def test_verified_allowed_identity_and_stable_id(self):
         policy = policy_from_settings(settings())
         first = principal_from_claims(identity(), policy)
@@ -61,6 +69,9 @@ class PolicyTests(unittest.TestCase):
                                       'max_session_seconds': 0}},
         ]
         for key, value in [('redirect_uri', 'http://localhost:8501/oauth2callback'),
+                           ('client_secret', 'test-client'),
+                           ('client_secret', 'YOUR_AUTH0_APPLICATION_CLIENT_SECRET'),
+                           ('cookie_secret', 'REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS'),
                            ('server_metadata_url', 'http://test.us.auth0.com/.well-known/openid-configuration'),
                            ('expose_tokens', ['access']), ('cookie_secret', 'short')]:
             config = copy.deepcopy(settings())
@@ -73,6 +84,14 @@ class PolicyTests(unittest.TestCase):
         local['auth']['redirect_uri'] = 'http://localhost:8501/oauth2callback'
         self.assertTrue(policy_from_settings(local, 'development'))
 
+    def test_configuration_error_identifies_field_without_disclosing_value(self):
+        config = settings()
+        config['auth']['client_secret'] = 'YOUR_private_test_value'
+        with self.assertRaises(AuthenticationError) as error:
+            policy_from_settings(config)
+        self.assertIn('[auth].client_secret', str(error.exception))
+        self.assertNotIn(config['auth']['client_secret'], str(error.exception))
+
 
 class AuthenticationUITests(unittest.TestCase):
     def setUp(self):
@@ -81,6 +100,8 @@ class AuthenticationUITests(unittest.TestCase):
         })
         environment.start()
         self.addCleanup(environment.stop)
+        company_fixture(self, [Principal('https://test.us.auth0.com/', subject, 'user@example.com')
+                               for subject in ['auth0|user-1', 'auth0|other-account']])
 
     def assert_workspace_blocked(self, app):
         self.assertFalse(app.exception)
@@ -89,7 +110,7 @@ class AuthenticationUITests(unittest.TestCase):
 
     def test_missing_configuration_and_production_bypass_are_blocked(self):
         with patch('authentication.st.secrets', {}):
-            app = AppTest.from_file('streamlit_app.py').run()
+            app = AppTest.from_file('streamlit_app.py', default_timeout=20).run()
         self.assert_workspace_blocked(app)
         self.assertTrue(app.error)
         with patch.dict(os.environ, {'DEV_AUTH_BYPASS': 'true'}):
@@ -100,7 +121,8 @@ class AuthenticationUITests(unittest.TestCase):
         with patch('authentication.st.secrets', settings()), \
                 patch('streamlit.user_info.UserInfoProxy.to_dict', return_value={}), \
                 patch('authentication.st.login') as login:
-            app = AppTest.from_file('streamlit_app.py').run()
+            # The first Windows run imports the document/ML dependencies.
+            app = AppTest.from_file('streamlit_app.py', default_timeout=20).run()
             self.assert_workspace_blocked(app)
             app.button(key='auth_login').click().run()
             login.assert_called_once_with()

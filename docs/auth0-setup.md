@@ -1,5 +1,10 @@
 # Auth0 setup
 
+Company workspaces are now available. The default access mode remains the
+private email allowlist. For explicit multi-company registration with verified
+accounts, see [company setup](company-workspaces.md); invitations still control
+membership in existing companies.
+
 QueryPilot uses Auth0 Universal Login through Streamlit's native OpenID Connect
 integration. Auth0 has a Free plan; review [current pricing](https://auth0.com/pricing)
 and connection availability before enabling features. This implementation does
@@ -19,8 +24,12 @@ in Auth0 rather than implemented as password forms in QueryPilot.
 3. Set **Allowed Callback URLs** to the exact public callback URL, for example
    `https://querypilot.example.com/oauth2callback`. Register
    `http://localhost:8501/oauth2callback` separately if testing locally.
-4. Set **Allowed Logout URLs** to your app origin, for example
-   `https://querypilot.example.com` (and the localhost origin when developing).
+4. Set **Allowed Logout URLs** to your app origin and exact OIDC callback,
+   for example `https://querypilot.example.com` and
+   `https://querypilot.example.com/oauth2callback`. Streamlit's OIDC logout uses
+   its configured `redirect_uri` as `post_logout_redirect_uri`. For local testing,
+   include both `http://localhost:8501` and
+   `http://localhost:8501/oauth2callback` in Allowed Logout URLs.
    If Auth0 asks for Allowed Web Origins, use the same app origins. Keep HTTPS in
    production. Do not register wildcard callbacks.
 5. Record the tenant domain and Application Client ID. Copy the Client Secret
@@ -82,6 +91,19 @@ Never enable this bypass in a public deployment. An attempted bypass with
 `APP_ENV=production` is blocked. Do not disable Streamlit CORS or XSRF protection.
 
 ## Validation and rollout
+
+On Windows, validate the local settings without printing credential values:
+
+```powershell
+.\.venv\Scripts\python.exe check_local_auth.py
+.\.venv\Scripts\python.exe -m unittest test_authentication -v
+.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py --server.address=localhost --server.port=8501
+```
+
+The local check identifies missing settings and example placeholders. It does
+not verify the Client Secret with Auth0 or confirm the application's dashboard
+type and allowed URLs. After changing secrets, restart Streamlit, then complete
+an actual browser login and logout on `http://localhost:8501`.
 
 ```bash
 .venv/bin/python -m unittest test_querypilot test_streamlit_app test_groq test_authentication -v
