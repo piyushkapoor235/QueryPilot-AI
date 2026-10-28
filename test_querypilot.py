@@ -7,6 +7,24 @@ from querypilot import (answer_documents, answer_sql, build_document_index, chun
 
 
 class QueryPilotTests(unittest.TestCase):
+    def test_local_retrieval_across_embedding_instances(self):
+        from local_embeddings import LocalEmbeddings
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        index = build_document_index([
+            ('database', 'SQLite databases contain tables and SQL queries.'),
+            ('solid', 'The single responsibility principle gives a class one responsibility.'),
+        ], LocalEmbeddings())
+        model = Mock()
+        model.invoke.return_value = SimpleNamespace(content='One responsibility [1].')
+        result = answer_documents(model, LocalEmbeddings(),
+                                  'Explain the single responsibility principle', [], index)
+        self.assertEqual(result['sources'][0]['source'], 'solid')
+        self.assertEqual(result['answer'], 'One responsibility [1].')
+        self.assertEqual(cosine_similarity(LocalEmbeddings().embed_query(''),
+                                           index['vectors'][0]), 0)
+
     def test_northwind_query(self):
         result = execute_query('SELECT COUNT(*) AS count FROM Employees')
         self.assertGreater(result['rows'][0][0], 0)
